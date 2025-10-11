@@ -86,141 +86,144 @@ def screen_string(display):
         out += '\n'
     return out
 
+class State:
+    def __init__(self, iter):
+        self.ram = bytearray(4096)
+        self.display = bytearray(WIDTH * HEIGHT)
+        self.regs = bytearray(16)
+        self.stack = array('H', 12 * [0])
+        self.sp = 0
+        self.pc = 0x200
+        self.last_pc = 0x0
+        self.address_reg = 0x0
+
+        # Just in case any program tries to optimize away code.
+        self.ram[0x199] = iter
+
+        # Load ROM at address 0x200
+        self.ram[0x200:0x200 + len(ROM_DATA)] = ROM_DATA
+
+def step(state):
+    state.last_pc = state.pc
+    opcode = (state.ram[state.pc] << 8) | state.ram[state.pc + 1]
+    state.pc += 2
+
+    # Match on the highest 4 bits
+    match opcode >> 12:
+        case 0x0:
+            match opcode:
+                case 0x0E0:
+                    # Clearing the screen without new allocations.
+                    for i in range(len(state.display)):
+                        state.display[i] = 0
+                case 0x0EE:
+                    state.sp -= 1
+                    state.pc = state.stack[state.sp]
+                case _:
+                    raise NotImplementedError(f"Opcode 0x{opcode:04X} not implemented")
+        case 0x1:
+            state.pc = opcode & 0x0FFF
+        case 0x2:
+            state.stack[state.sp] = state.pc
+            state.sp += 1
+            state.pc = opcode & 0x0FFF
+        case 0x3:
+            x = state.regs[(opcode&0x0F00)>>8]
+            state.pc += 2*int(x == opcode & 0xFF)
+        case 0x4:
+            x = state.regs[(opcode&0x0F00)>>8]
+            state.pc += 2*int(x != opcode & 0xFF)
+        case 0x5:
+            x = state.regs[(opcode&0x0F00)>>8]
+            y = state.regs[(opcode&0x00F0)>>4]
+            state.pc += 2*int(x == y)
+        case 0x6:
+            state.regs[(opcode&0x0F00)>>8] = opcode & 0x00FF
+        case 0x7:
+            state.regs[(opcode&0x0F00)>>8] = (state.regs[(opcode&0x0F00)>>8] + (opcode & 0x00FF)) & 0xFF
+        case 0x8:
+            x = (opcode&0x0F00)>>8
+            y = (opcode&0x00F0)>>4
+            match opcode & 0x000F:
+                case 0x0:
+                    state.regs[x] = state.regs[y]
+                case 0x1:
+                    state.regs[x] |= state.regs[y]
+                case 0x2:
+                    state.regs[x] &= state.regs[y]
+                case 0x3:
+                    state.regs[x] ^= state.regs[y]
+                case 0x4:
+                    out = state.regs[x] + state.regs[y]
+                    state.regs[0xF] = int(out > 0xFF)
+                    state.regs[x] = out & 0xFF
+                case 0x5:
+                    out = state.regs[x] - state.regs[y]
+                    state.regs[0xF] = int(out >= 0)
+                    state.regs[x] = out & 0xFF
+                case 0x6:
+                    state.regs[0xF] = state.regs[y] & 0x01
+                    state.regs[x] = state.regs[y] >> 1
+                case 0x7:
+                    out = state.regs[y] - state.regs[x]
+                    state.regs[0xF] = int(out >= 0)
+                    state.regs[x] = out & 0xFF
+                case 0xE:
+                    state.regs[0xF] = (state.regs[y] & 0x80) >> 7
+                    state.regs[x] = (state.regs[y] << 1) & 0xFF
+                case _:
+                    raise NotImplementedError(f"Opcode 0x{opcode:04X} not implemented")
+        case 0x9:
+            x = state.regs[(opcode&0x0F00)>>8]
+            y = state.regs[(opcode&0x00F0)>>4]
+            state.pc += 2*int(x != y)
+        case 0xA:
+            state.address_reg = opcode & 0x0FFF
+        case 0xB:
+            raise NotImplementedError(f"Opcode 0x{opcode:04X} not implemented")
+        case 0xC:
+            raise NotImplementedError(f"Opcode 0x{opcode:04X} not implemented")
+        case 0xD:
+            x = state.regs[(opcode&0x0F00)>>8] % WIDTH
+            y = state.regs[(opcode&0x00F0)>>4] % HEIGHT
+            n = opcode & 0x000F
+            state.regs[0xF] = 0
+            for i in range(y, min(y+n,HEIGHT)):
+                sprite_byte = state.ram[state.address_reg+i-y]
+                for j in range(x, min(x+8,WIDTH)):
+                    bit_index = j - x
+                    pixel = (sprite_byte & (0x80 >> bit_index)) >> (7 - bit_index)
+                    offset = j + i * WIDTH
+                    state.regs[0xF] |= state.display[offset] & pixel
+                    state.display[offset] ^= pixel
+        case 0xE:
+            raise NotImplementedError(f"Opcode 0x{opcode:04X} not implemented")
+        case 0xF:
+            x = (opcode&0x0F00)>>8
+            match opcode & 0x00FF:
+                case 0x33:
+                    rx = state.regs[x]
+                    hundreds = rx//100
+                    rx -= hundreds * 100
+                    tens = rx//10
+                    ones = rx - tens * 10
+                    state.ram[state.address_reg] = hundreds
+                    state.ram[state.address_reg+1] = tens
+                    state.ram[state.address_reg+2] = ones
+                case 0x55:
+                    state.ram[state.address_reg:state.address_reg+x+1] = state.regs[0:x+1]
+                    state.address_reg += x + 1
+                case 0x65:
+                    state.regs[0:x+1] = state.ram[state.address_reg:state.address_reg+x+1]
+                    state.address_reg += x + 1
+                case _:
+                    raise NotImplementedError(f"Opcode 0x{opcode:04X} not implemented")
+
 def test_chip8(i):
-    ram = bytearray(4096)
-    display = bytearray(WIDTH*HEIGHT)
-    regs = bytearray(16)
-    stack = array('H',12*[0])
-    sp = 0
-    pc = 0x200
-    last_pc = 0x0
-    address_reg = 0x0
-
-    # Just in case any program tries to optimize away code.
-    ram[0x199] = i
-
-    # Load ROM at address 0x200
-    ram[0x200:0x200 + len(ROM_DATA)] = ROM_DATA
-
-    while True:
-        if pc == last_pc:
-            break
-        last_pc = pc
-        opcode = (ram[pc] << 8) | ram[pc + 1]
-        pc += 2
-
-        # Match on the highest 4 bits
-        match opcode >> 12:
-            case 0x0:
-                match opcode:
-                    case 0x0E0:
-                        # Clearing the screen without new allocations.
-                        for i in range(len(display)):
-                            display[i] = 0
-                    case 0x0EE:
-                        sp -= 1
-                        pc = stack[sp]
-                    case _:
-                        raise NotImplementedError(f"Opcode 0x{opcode:04X} not implemented")
-            case 0x1:
-                pc = opcode & 0x0FFF
-            case 0x2:
-                stack[sp] = pc
-                sp += 1
-                pc = opcode & 0x0FFF
-            case 0x3:
-                x = regs[(opcode&0x0F00)>>8]
-                pc += 2*int(x == opcode & 0xFF)
-            case 0x4:
-                x = regs[(opcode&0x0F00)>>8]
-                pc += 2*int(x != opcode & 0xFF)
-            case 0x5:
-                x = regs[(opcode&0x0F00)>>8]
-                y = regs[(opcode&0x00F0)>>4]
-                pc += 2*int(x == y)
-            case 0x6:
-                regs[(opcode&0x0F00)>>8] = opcode & 0x00FF
-            case 0x7:
-                regs[(opcode&0x0F00)>>8] = (regs[(opcode&0x0F00)>>8] + (opcode & 0x00FF)) & 0xFF
-            case 0x8:
-                x = (opcode&0x0F00)>>8
-                y = (opcode&0x00F0)>>4
-                match opcode & 0x000F:
-                    case 0x0:
-                        regs[x] = regs[y]
-                    case 0x1:
-                        regs[x] |= regs[y]
-                    case 0x2:
-                        regs[x] &= regs[y]
-                    case 0x3:
-                        regs[x] ^= regs[y]
-                    case 0x4:
-                        out = regs[x] + regs[y]
-                        regs[0xF] = int(out > 0xFF)
-                        regs[x] = out & 0xFF
-                    case 0x5:
-                        out = regs[x] - regs[y]
-                        regs[0xF] = int(out >= 0)
-                        regs[x] = out & 0xFF
-                    case 0x6:
-                        regs[0xF] = regs[y] & 0x01
-                        regs[x] = regs[y] >> 1
-                    case 0x7:
-                        out = regs[y] - regs[x]
-                        regs[0xF] = int(out >= 0)
-                        regs[x] = out & 0xFF
-                    case 0xE:
-                        regs[0xF] = (regs[y] & 0x80) >> 7
-                        regs[x] = (regs[y] << 1) & 0xFF
-                    case _:
-                        raise NotImplementedError(f"Opcode 0x{opcode:04X} not implemented")
-            case 0x9:
-                x = regs[(opcode&0x0F00)>>8]
-                y = regs[(opcode&0x00F0)>>4]
-                pc += 2*int(x != y)
-            case 0xA:
-                address_reg = opcode & 0x0FFF
-            case 0xB:
-                raise NotImplementedError(f"Opcode 0x{opcode:04X} not implemented")
-            case 0xC:
-                raise NotImplementedError(f"Opcode 0x{opcode:04X} not implemented")
-            case 0xD:
-                x = regs[(opcode&0x0F00)>>8] % WIDTH
-                y = regs[(opcode&0x00F0)>>4] % HEIGHT
-                n = opcode & 0x000F
-                regs[0xF] = 0
-                for i in range(y, min(y+n,HEIGHT)):
-                    sprite_byte = ram[address_reg+i-y]
-                    for j in range(x, min(x+8,WIDTH)):
-                        bit_index = j - x
-                        pixel = (sprite_byte & (0x80 >> bit_index)) >> (7 - bit_index)
-                        offset = j + i * WIDTH
-                        regs[0xF] |= display[offset] & pixel
-                        display[offset] ^= pixel
-            case 0xE:
-                raise NotImplementedError(f"Opcode 0x{opcode:04X} not implemented")
-            case 0xF:
-                x = (opcode&0x0F00)>>8
-                match opcode & 0x00FF:
-                    case 0x33:
-                        rx = regs[x]
-                        hundreds = rx//100
-                        rx -= hundreds * 100
-                        tens = rx//10
-                        ones = rx - tens * 10
-                        ram[address_reg] = hundreds
-                        ram[address_reg+1] = tens
-                        ram[address_reg+2] = ones
-                    case 0x55:
-                        ram[address_reg:address_reg+x+1] = regs[0:x+1]
-                        address_reg += x + 1
-                    case 0x65:
-                        regs[0:x+1] = ram[address_reg:address_reg+x+1]
-                        address_reg += x + 1
-                    case _:
-                        raise NotImplementedError(f"Opcode 0x{opcode:04X} not implemented")
-
-    out = screen_string(display)
+    state = State(i)
+    while state.pc != state.last_pc:
+        step(state)
+    out = screen_string(state.display)
     assert out == EXPECTED
 
 

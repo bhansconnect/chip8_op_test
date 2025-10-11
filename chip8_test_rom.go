@@ -102,174 +102,188 @@ func screenString(display []byte) string {
 	return builder.String()
 }
 
-func testChip8(iter int) {
-	var ram [4096]byte
-	var display [WIDTH * HEIGHT]byte
-	var regs [16]byte
-	var stack [12]uint16
-	sp := 0
-	pc := 0x200
-	lastPC := 0x0
-	addressReg := 0x0
+type State struct {
+	ram        [4096]byte
+	display    [WIDTH * HEIGHT]byte
+	regs       [16]byte
+	stack      [12]uint16
+	sp         int
+	pc         int
+	lastPC     int
+	addressReg int
+}
 
-	// Just in case any program tries to optimize away code.
-	ram[0x199] = byte(iter & 0xFF)
-
-	// Load ROM at address 0x200
-	copy(ram[0x200:], romData)
-
-	for {
-		if pc == lastPC {
-			break
-		}
-		lastPC = pc
-		opcode := (int(ram[pc]) << 8) | int(ram[pc+1])
-		pc += 2
-
-		// Match on the highest 4 bits
-		switch opcode >> 12 {
-		case 0x0:
-			switch opcode {
-			case 0x0E0:
-				// Clearing the screen without new allocations.
-				for i := 0; i < len(display); i++ {
-					display[i] = 0
-				}
-			case 0x0EE:
-				sp -= 1
-				pc = int(stack[sp])
-			default:
-				panic(fmt.Sprintf("Opcode 0x%04X not implemented", opcode))
-			}
-		case 0x1:
-			pc = opcode & 0x0FFF
-		case 0x2:
-			stack[sp] = uint16(pc)
-			sp += 1
-			pc = opcode & 0x0FFF
-		case 0x3:
-			x := regs[(opcode&0x0F00)>>8]
-			if int(x) == (opcode & 0xFF) {
-				pc += 2
-			}
-		case 0x4:
-			x := regs[(opcode&0x0F00)>>8]
-			if int(x) != (opcode & 0xFF) {
-				pc += 2
-			}
-		case 0x5:
-			x := regs[(opcode&0x0F00)>>8]
-			y := regs[(opcode&0x00F0)>>4]
-			if x == y {
-				pc += 2
-			}
-		case 0x6:
-			regs[(opcode&0x0F00)>>8] = byte(opcode & 0x00FF)
-		case 0x7:
-			regs[(opcode&0x0F00)>>8] = byte((int(regs[(opcode&0x0F00)>>8]) + (opcode & 0x00FF)) & 0xFF)
-		case 0x8:
-			x := (opcode & 0x0F00) >> 8
-			y := (opcode & 0x00F0) >> 4
-			switch opcode & 0x000F {
-			case 0x0:
-				regs[x] = regs[y]
-			case 0x1:
-				regs[x] |= regs[y]
-			case 0x2:
-				regs[x] &= regs[y]
-			case 0x3:
-				regs[x] ^= regs[y]
-			case 0x4:
-				out := int(regs[x]) + int(regs[y])
-				if out > 0xFF {
-					regs[0xF] = 1
-				} else {
-					regs[0xF] = 0
-				}
-				regs[x] = byte(out & 0xFF)
-			case 0x5:
-				out := int(regs[x]) - int(regs[y])
-				if out >= 0 {
-					regs[0xF] = 1
-				} else {
-					regs[0xF] = 0
-				}
-				regs[x] = byte(out & 0xFF)
-			case 0x6:
-				regs[0xF] = regs[y] & 0x01
-				regs[x] = regs[y] >> 1
-			case 0x7:
-				out := int(regs[y]) - int(regs[x])
-				if out >= 0 {
-					regs[0xF] = 1
-				} else {
-					regs[0xF] = 0
-				}
-				regs[x] = byte(out & 0xFF)
-			case 0xE:
-				regs[0xF] = (regs[y] & 0x80) >> 7
-				regs[x] = (regs[y] << 1) & 0xFF
-			default:
-				panic(fmt.Sprintf("Opcode 0x%04X not implemented", opcode))
-			}
-		case 0x9:
-			x := regs[(opcode&0x0F00)>>8]
-			y := regs[(opcode&0x00F0)>>4]
-			if x != y {
-				pc += 2
-			}
-		case 0xA:
-			addressReg = opcode & 0x0FFF
-		case 0xB:
-			panic(fmt.Sprintf("Opcode 0x%04X not implemented", opcode))
-		case 0xC:
-			panic(fmt.Sprintf("Opcode 0x%04X not implemented", opcode))
-		case 0xD:
-			x := int(regs[(opcode&0x0F00)>>8]) % WIDTH
-			y := int(regs[(opcode&0x00F0)>>4]) % HEIGHT
-			n := opcode & 0x000F
-			regs[0xF] = 0
-			for i := y; i < min(y+n, HEIGHT); i++ {
-				spriteByte := ram[addressReg+i-y]
-				for j := x; j < min(x+8, WIDTH); j++ {
-					bitIndex := j - x
-					pixel := (spriteByte & (0x80 >> bitIndex)) >> (7 - bitIndex)
-					offset := j + i*WIDTH
-					regs[0xF] |= display[offset] & pixel
-					display[offset] ^= pixel
-				}
-			}
-		case 0xE:
-			panic(fmt.Sprintf("Opcode 0x%04X not implemented", opcode))
-		case 0xF:
-			x := (opcode & 0x0F00) >> 8
-			switch opcode & 0x00FF {
-			case 0x33:
-				rx := int(regs[x])
-				hundreds := rx / 100
-				rx -= hundreds * 100
-				tens := rx / 10
-				ones := rx - tens*10
-				ram[addressReg] = byte(hundreds)
-				ram[addressReg+1] = byte(tens)
-				ram[addressReg+2] = byte(ones)
-			case 0x55:
-				for i := 0; i <= x; i++ {
-					ram[addressReg+i] = regs[i]
-				}
-				addressReg += x + 1
-			case 0x65:
-				for i := 0; i <= x; i++ {
-					regs[i] = ram[addressReg+i]
-				}
-				addressReg += x + 1
-			default:
-				panic(fmt.Sprintf("Opcode 0x%04X not implemented", opcode))
-			}
-		}
+func newState(iter int) *State {
+	s := &State{
+		sp:         0,
+		pc:         0x200,
+		lastPC:     0x0,
+		addressReg: 0x0,
 	}
 
-	out := screenString(display[:])
+	// Just in case any program tries to optimize away code.
+	s.ram[0x199] = byte(iter & 0xFF)
+
+	// Load ROM at address 0x200
+	copy(s.ram[0x200:], romData)
+
+	return s
+}
+
+func step(state *State) {
+	state.lastPC = state.pc
+	opcode := (int(state.ram[state.pc]) << 8) | int(state.ram[state.pc+1])
+	state.pc += 2
+
+	// Match on the highest 4 bits
+	switch opcode >> 12 {
+	case 0x0:
+		switch opcode {
+		case 0x0E0:
+			// Clearing the screen without new allocations.
+			for i := 0; i < len(state.display); i++ {
+				state.display[i] = 0
+			}
+		case 0x0EE:
+			state.sp -= 1
+			state.pc = int(state.stack[state.sp])
+		default:
+			panic(fmt.Sprintf("Opcode 0x%04X not implemented", opcode))
+		}
+	case 0x1:
+		state.pc = opcode & 0x0FFF
+	case 0x2:
+		state.stack[state.sp] = uint16(state.pc)
+		state.sp += 1
+		state.pc = opcode & 0x0FFF
+	case 0x3:
+		x := state.regs[(opcode&0x0F00)>>8]
+		if int(x) == (opcode & 0xFF) {
+			state.pc += 2
+		}
+	case 0x4:
+		x := state.regs[(opcode&0x0F00)>>8]
+		if int(x) != (opcode & 0xFF) {
+			state.pc += 2
+		}
+	case 0x5:
+		x := state.regs[(opcode&0x0F00)>>8]
+		y := state.regs[(opcode&0x00F0)>>4]
+		if x == y {
+			state.pc += 2
+		}
+	case 0x6:
+		state.regs[(opcode&0x0F00)>>8] = byte(opcode & 0x00FF)
+	case 0x7:
+		state.regs[(opcode&0x0F00)>>8] = byte((int(state.regs[(opcode&0x0F00)>>8]) + (opcode & 0x00FF)) & 0xFF)
+	case 0x8:
+		x := (opcode & 0x0F00) >> 8
+		y := (opcode & 0x00F0) >> 4
+		switch opcode & 0x000F {
+		case 0x0:
+			state.regs[x] = state.regs[y]
+		case 0x1:
+			state.regs[x] |= state.regs[y]
+		case 0x2:
+			state.regs[x] &= state.regs[y]
+		case 0x3:
+			state.regs[x] ^= state.regs[y]
+		case 0x4:
+			out := int(state.regs[x]) + int(state.regs[y])
+			if out > 0xFF {
+				state.regs[0xF] = 1
+			} else {
+				state.regs[0xF] = 0
+			}
+			state.regs[x] = byte(out & 0xFF)
+		case 0x5:
+			out := int(state.regs[x]) - int(state.regs[y])
+			if out >= 0 {
+				state.regs[0xF] = 1
+			} else {
+				state.regs[0xF] = 0
+			}
+			state.regs[x] = byte(out & 0xFF)
+		case 0x6:
+			state.regs[0xF] = state.regs[y] & 0x01
+			state.regs[x] = state.regs[y] >> 1
+		case 0x7:
+			out := int(state.regs[y]) - int(state.regs[x])
+			if out >= 0 {
+				state.regs[0xF] = 1
+			} else {
+				state.regs[0xF] = 0
+			}
+			state.regs[x] = byte(out & 0xFF)
+		case 0xE:
+			state.regs[0xF] = (state.regs[y] & 0x80) >> 7
+			state.regs[x] = (state.regs[y] << 1) & 0xFF
+		default:
+			panic(fmt.Sprintf("Opcode 0x%04X not implemented", opcode))
+		}
+	case 0x9:
+		x := state.regs[(opcode&0x0F00)>>8]
+		y := state.regs[(opcode&0x00F0)>>4]
+		if x != y {
+			state.pc += 2
+		}
+	case 0xA:
+		state.addressReg = opcode & 0x0FFF
+	case 0xB:
+		panic(fmt.Sprintf("Opcode 0x%04X not implemented", opcode))
+	case 0xC:
+		panic(fmt.Sprintf("Opcode 0x%04X not implemented", opcode))
+	case 0xD:
+		x := int(state.regs[(opcode&0x0F00)>>8]) % WIDTH
+		y := int(state.regs[(opcode&0x00F0)>>4]) % HEIGHT
+		n := opcode & 0x000F
+		state.regs[0xF] = 0
+		for i := y; i < min(y+n, HEIGHT); i++ {
+			spriteByte := state.ram[state.addressReg+i-y]
+			for j := x; j < min(x+8, WIDTH); j++ {
+				bitIndex := j - x
+				pixel := (spriteByte & (0x80 >> bitIndex)) >> (7 - bitIndex)
+				offset := j + i*WIDTH
+				state.regs[0xF] |= state.display[offset] & pixel
+				state.display[offset] ^= pixel
+			}
+		}
+	case 0xE:
+		panic(fmt.Sprintf("Opcode 0x%04X not implemented", opcode))
+	case 0xF:
+		x := (opcode & 0x0F00) >> 8
+		switch opcode & 0x00FF {
+		case 0x33:
+			rx := int(state.regs[x])
+			hundreds := rx / 100
+			rx -= hundreds * 100
+			tens := rx / 10
+			ones := rx - tens*10
+			state.ram[state.addressReg] = byte(hundreds)
+			state.ram[state.addressReg+1] = byte(tens)
+			state.ram[state.addressReg+2] = byte(ones)
+		case 0x55:
+			for i := 0; i <= x; i++ {
+				state.ram[state.addressReg+i] = state.regs[i]
+			}
+			state.addressReg += x + 1
+		case 0x65:
+			for i := 0; i <= x; i++ {
+				state.regs[i] = state.ram[state.addressReg+i]
+			}
+			state.addressReg += x + 1
+		default:
+			panic(fmt.Sprintf("Opcode 0x%04X not implemented", opcode))
+		}
+	}
+}
+
+func testChip8(iter int) {
+	state := newState(iter)
+	for state.pc != state.lastPC {
+		step(state)
+	}
+	out := screenString(state.display[:])
 	if out != expected {
 		panic("Assertion failed: output does not match expected")
 	}

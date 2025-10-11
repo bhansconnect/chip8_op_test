@@ -87,203 +87,208 @@ function screen_string(display) {
     return out;
 }
 
-function test_chip8(iter) {
-    const ram = new Uint8Array(4096);
-    const display = new Uint8Array(WIDTH * HEIGHT);
-    const regs = new Uint8Array(16);
-    const stack = new Uint16Array(12);
-    let sp = 0;
-    let pc = 0x200;
-    let last_pc = 0x0;
-    let address_reg = 0x0;
+class State {
+    constructor(iter) {
+        this.ram = new Uint8Array(4096);
+        this.display = new Uint8Array(WIDTH * HEIGHT);
+        this.regs = new Uint8Array(16);
+        this.stack = new Uint16Array(12);
+        this.sp = 0;
+        this.pc = 0x200;
+        this.last_pc = 0x0;
+        this.address_reg = 0x0;
 
-    // Just in case any program tries to optimize away code.
-    ram[0x199] = iter & 0xFF;
+        // Just in case any program tries to optimize away code.
+        this.ram[0x199] = iter & 0xFF;
 
-    // Load ROM at address 0x200
-    ram.set(ROM_DATA, 0x200);
+        // Load ROM at address 0x200
+        this.ram.set(ROM_DATA, 0x200);
+    }
+}
 
-    while (true) {
-        if (pc === last_pc) {
+function step(state) {
+    state.last_pc = state.pc;
+    const opcode = (state.ram[state.pc] << 8) | state.ram[state.pc + 1];
+    state.pc += 2;
+
+    // Match on the highest 4 bits
+    switch (opcode >> 12) {
+        case 0x0:
+            switch (opcode) {
+                case 0x0E0:
+                    // Clearing the screen without new allocations.
+                    for (let i = 0; i < state.display.length; i++) {
+                        state.display[i] = 0;
+                    }
+                    break;
+                case 0x0EE:
+                    state.sp -= 1;
+                    state.pc = state.stack[state.sp];
+                    break;
+                default:
+                    throw new Error(`Opcode 0x${opcode.toString(16).padStart(4, '0')} not implemented`);
+            }
             break;
-        }
-        last_pc = pc;
-        const opcode = (ram[pc] << 8) | ram[pc + 1];
-        pc += 2;
-
-        // Match on the highest 4 bits
-        switch (opcode >> 12) {
-            case 0x0:
-                switch (opcode) {
-                    case 0x0E0:
-                        // Clearing the screen without new allocations.
-                        for (let i = 0; i < display.length; i++) {
-                            display[i] = 0;
+        case 0x1:
+            state.pc = opcode & 0x0FFF;
+            break;
+        case 0x2:
+            state.stack[state.sp] = state.pc;
+            state.sp += 1;
+            state.pc = opcode & 0x0FFF;
+            break;
+        case 0x3:
+            {
+                const x = state.regs[(opcode & 0x0F00) >> 8];
+                state.pc += 2 * (x === (opcode & 0xFF) ? 1 : 0);
+            }
+            break;
+        case 0x4:
+            {
+                const x = state.regs[(opcode & 0x0F00) >> 8];
+                state.pc += 2 * (x !== (opcode & 0xFF) ? 1 : 0);
+            }
+            break;
+        case 0x5:
+            {
+                const x = state.regs[(opcode & 0x0F00) >> 8];
+                const y = state.regs[(opcode & 0x00F0) >> 4];
+                state.pc += 2 * (x === y ? 1 : 0);
+            }
+            break;
+        case 0x6:
+            state.regs[(opcode & 0x0F00) >> 8] = opcode & 0x00FF;
+            break;
+        case 0x7:
+            state.regs[(opcode & 0x0F00) >> 8] = (state.regs[(opcode & 0x0F00) >> 8] + (opcode & 0x00FF)) & 0xFF;
+            break;
+        case 0x8:
+            {
+                const x = (opcode & 0x0F00) >> 8;
+                const y = (opcode & 0x00F0) >> 4;
+                switch (opcode & 0x000F) {
+                    case 0x0:
+                        state.regs[x] = state.regs[y];
+                        break;
+                    case 0x1:
+                        state.regs[x] |= state.regs[y];
+                        break;
+                    case 0x2:
+                        state.regs[x] &= state.regs[y];
+                        break;
+                    case 0x3:
+                        state.regs[x] ^= state.regs[y];
+                        break;
+                    case 0x4:
+                        {
+                            const out = state.regs[x] + state.regs[y];
+                            state.regs[0xF] = out > 0xFF ? 1 : 0;
+                            state.regs[x] = out & 0xFF;
                         }
                         break;
-                    case 0x0EE:
-                        sp -= 1;
-                        pc = stack[sp];
+                    case 0x5:
+                        {
+                            const out = state.regs[x] - state.regs[y];
+                            state.regs[0xF] = out >= 0 ? 1 : 0;
+                            state.regs[x] = out & 0xFF;
+                        }
+                        break;
+                    case 0x6:
+                        state.regs[0xF] = state.regs[y] & 0x01;
+                        state.regs[x] = state.regs[y] >> 1;
+                        break;
+                    case 0x7:
+                        {
+                            const out = state.regs[y] - state.regs[x];
+                            state.regs[0xF] = out >= 0 ? 1 : 0;
+                            state.regs[x] = out & 0xFF;
+                        }
+                        break;
+                    case 0xE:
+                        state.regs[0xF] = (state.regs[y] & 0x80) >> 7;
+                        state.regs[x] = (state.regs[y] << 1) & 0xFF;
                         break;
                     default:
                         throw new Error(`Opcode 0x${opcode.toString(16).padStart(4, '0')} not implemented`);
                 }
-                break;
-            case 0x1:
-                pc = opcode & 0x0FFF;
-                break;
-            case 0x2:
-                stack[sp] = pc;
-                sp += 1;
-                pc = opcode & 0x0FFF;
-                break;
-            case 0x3:
-                {
-                    const x = regs[(opcode & 0x0F00) >> 8];
-                    pc += 2 * (x === (opcode & 0xFF) ? 1 : 0);
-                }
-                break;
-            case 0x4:
-                {
-                    const x = regs[(opcode & 0x0F00) >> 8];
-                    pc += 2 * (x !== (opcode & 0xFF) ? 1 : 0);
-                }
-                break;
-            case 0x5:
-                {
-                    const x = regs[(opcode & 0x0F00) >> 8];
-                    const y = regs[(opcode & 0x00F0) >> 4];
-                    pc += 2 * (x === y ? 1 : 0);
-                }
-                break;
-            case 0x6:
-                regs[(opcode & 0x0F00) >> 8] = opcode & 0x00FF;
-                break;
-            case 0x7:
-                regs[(opcode & 0x0F00) >> 8] = (regs[(opcode & 0x0F00) >> 8] + (opcode & 0x00FF)) & 0xFF;
-                break;
-            case 0x8:
-                {
-                    const x = (opcode & 0x0F00) >> 8;
-                    const y = (opcode & 0x00F0) >> 4;
-                    switch (opcode & 0x000F) {
-                        case 0x0:
-                            regs[x] = regs[y];
-                            break;
-                        case 0x1:
-                            regs[x] |= regs[y];
-                            break;
-                        case 0x2:
-                            regs[x] &= regs[y];
-                            break;
-                        case 0x3:
-                            regs[x] ^= regs[y];
-                            break;
-                        case 0x4:
-                            {
-                                const out = regs[x] + regs[y];
-                                regs[0xF] = out > 0xFF ? 1 : 0;
-                                regs[x] = out & 0xFF;
-                            }
-                            break;
-                        case 0x5:
-                            {
-                                const out = regs[x] - regs[y];
-                                regs[0xF] = out >= 0 ? 1 : 0;
-                                regs[x] = out & 0xFF;
-                            }
-                            break;
-                        case 0x6:
-                            regs[0xF] = regs[y] & 0x01;
-                            regs[x] = regs[y] >> 1;
-                            break;
-                        case 0x7:
-                            {
-                                const out = regs[y] - regs[x];
-                                regs[0xF] = out >= 0 ? 1 : 0;
-                                regs[x] = out & 0xFF;
-                            }
-                            break;
-                        case 0xE:
-                            regs[0xF] = (regs[y] & 0x80) >> 7;
-                            regs[x] = (regs[y] << 1) & 0xFF;
-                            break;
-                        default:
-                            throw new Error(`Opcode 0x${opcode.toString(16).padStart(4, '0')} not implemented`);
+            }
+            break;
+        case 0x9:
+            {
+                const x = state.regs[(opcode & 0x0F00) >> 8];
+                const y = state.regs[(opcode & 0x00F0) >> 4];
+                state.pc += 2 * (x !== y ? 1 : 0);
+            }
+            break;
+        case 0xA:
+            state.address_reg = opcode & 0x0FFF;
+            break;
+        case 0xB:
+            throw new Error(`Opcode 0x${opcode.toString(16).padStart(4, '0')} not implemented`);
+        case 0xC:
+            throw new Error(`Opcode 0x${opcode.toString(16).padStart(4, '0')} not implemented`);
+        case 0xD:
+            {
+                const x = state.regs[(opcode & 0x0F00) >> 8] % WIDTH;
+                const y = state.regs[(opcode & 0x00F0) >> 4] % HEIGHT;
+                const n = opcode & 0x000F;
+                state.regs[0xF] = 0;
+                for (let i = y; i < Math.min(y + n, HEIGHT); i++) {
+                    const sprite_byte = state.ram[state.address_reg + i - y];
+                    for (let j = x; j < Math.min(x + 8, WIDTH); j++) {
+                        const bit_index = j - x;
+                        const pixel = (sprite_byte & (0x80 >> bit_index)) >> (7 - bit_index);
+                        const offset = j + i * WIDTH;
+                        state.regs[0xF] |= state.display[offset] & pixel;
+                        state.display[offset] ^= pixel;
                     }
                 }
-                break;
-            case 0x9:
-                {
-                    const x = regs[(opcode & 0x0F00) >> 8];
-                    const y = regs[(opcode & 0x00F0) >> 4];
-                    pc += 2 * (x !== y ? 1 : 0);
-                }
-                break;
-            case 0xA:
-                address_reg = opcode & 0x0FFF;
-                break;
-            case 0xB:
-                throw new Error(`Opcode 0x${opcode.toString(16).padStart(4, '0')} not implemented`);
-            case 0xC:
-                throw new Error(`Opcode 0x${opcode.toString(16).padStart(4, '0')} not implemented`);
-            case 0xD:
-                {
-                    const x = regs[(opcode & 0x0F00) >> 8] % WIDTH;
-                    const y = regs[(opcode & 0x00F0) >> 4] % HEIGHT;
-                    const n = opcode & 0x000F;
-                    regs[0xF] = 0;
-                    for (let i = y; i < Math.min(y + n, HEIGHT); i++) {
-                        const sprite_byte = ram[address_reg + i - y];
-                        for (let j = x; j < Math.min(x + 8, WIDTH); j++) {
-                            const bit_index = j - x;
-                            const pixel = (sprite_byte & (0x80 >> bit_index)) >> (7 - bit_index);
-                            const offset = j + i * WIDTH;
-                            regs[0xF] |= display[offset] & pixel;
-                            display[offset] ^= pixel;
+            }
+            break;
+        case 0xE:
+            throw new Error(`Opcode 0x${opcode.toString(16).padStart(4, '0')} not implemented`);
+        case 0xF:
+            {
+                const x = (opcode & 0x0F00) >> 8;
+                switch (opcode & 0x00FF) {
+                    case 0x33:
+                        {
+                            let rx = state.regs[x];
+                            const hundreds = Math.floor(rx / 100);
+                            rx -= hundreds * 100;
+                            const tens = Math.floor(rx / 10);
+                            const ones = rx - tens * 10;
+                            state.ram[state.address_reg] = hundreds;
+                            state.ram[state.address_reg + 1] = tens;
+                            state.ram[state.address_reg + 2] = ones;
                         }
-                    }
+                        break;
+                    case 0x55:
+                        for (let i = 0; i <= x; i++) {
+                            state.ram[state.address_reg + i] = state.regs[i];
+                        }
+                        state.address_reg += x + 1;
+                        break;
+                    case 0x65:
+                        for (let i = 0; i <= x; i++) {
+                            state.regs[i] = state.ram[state.address_reg + i];
+                        }
+                        state.address_reg += x + 1;
+                        break;
+                    default:
+                        throw new Error(`Opcode 0x${opcode.toString(16).padStart(4, '0')} not implemented`);
                 }
-                break;
-            case 0xE:
-                throw new Error(`Opcode 0x${opcode.toString(16).padStart(4, '0')} not implemented`);
-            case 0xF:
-                {
-                    const x = (opcode & 0x0F00) >> 8;
-                    switch (opcode & 0x00FF) {
-                        case 0x33:
-                            {
-                                let rx = regs[x];
-                                const hundreds = Math.floor(rx / 100);
-                                rx -= hundreds * 100;
-                                const tens = Math.floor(rx / 10);
-                                const ones = rx - tens * 10;
-                                ram[address_reg] = hundreds;
-                                ram[address_reg + 1] = tens;
-                                ram[address_reg + 2] = ones;
-                            }
-                            break;
-                        case 0x55:
-                            for (let i = 0; i <= x; i++) {
-                                ram[address_reg + i] = regs[i];
-                            }
-                            address_reg += x + 1;
-                            break;
-                        case 0x65:
-                            for (let i = 0; i <= x; i++) {
-                                regs[i] = ram[address_reg + i];
-                            }
-                            address_reg += x + 1;
-                            break;
-                        default:
-                            throw new Error(`Opcode 0x${opcode.toString(16).padStart(4, '0')} not implemented`);
-                    }
-                }
-                break;
-        }
+            }
+            break;
     }
+}
 
-    const out = screen_string(display);
+function test_chip8(iter) {
+    const state = new State(iter);
+    while (state.pc !== state.last_pc) {
+        step(state);
+    }
+    const out = screen_string(state.display);
     if (out !== EXPECTED) {
         throw new Error('Assertion failed: output does not match expected');
     }
