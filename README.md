@@ -7,3 +7,5 @@ I am trying to make the structure and implementations apples to apples where pos
 Clearly roc will be immutable and others will not, but we still map as close as we can.
 
 Hopefully, this gives us a good optimization target for the roc interpretter.
+
+TODO: build out a real platform for roc and get it executing the same as everything else once supported.
