@@ -1,0 +1,18 @@
+.{
+    .name = .chip8_basic_platform,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.15.1",
+    .dependencies = .{
+        .roc = .{
+            .url = "git+https://github.com/roc-lang/roc?ref=bhansconnect/push-muyposrxqmrq#ed213e12000cef865868a15e0a629e16bda71a70",
+            .hash = "roc-0.0.0-NAC9w827YgDwTcluocML-7BaD-XvPg-FTDpowzROBUtW",
+        },
+    },
+    .fingerprint = 0xc3e3cfbe6a25bb40,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "host.zig",
+        "main.roc",
+    },
+}

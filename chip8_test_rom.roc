@@ -1,4 +1,4 @@
-module [testChip8]
+app [runIters] { pf: platform "./platform/main.roc" }
 
 width = 64
 height = 32
@@ -375,24 +375,22 @@ runEmulator = |state| {
         runEmulator(step(state))
 }
 
-testChip8Helper : U8, U8 -> Bool
-testChip8Helper = |iter, count| {
+testChip8Helper : U64 -> {}
+testChip8Helper = |count| {
     if count == 0 then
-        Bool.True
+        {}
     else
-        state = initState(iter)
+        state = initState(count)
         finalState = runEmulator(state)
         out = screenString(finalState.display)
-        if out == expected then
-            testChip8Helper(iter, count - 1)
-        else
-            Bool.False
+        expect out == expected
+        testChip8Helper(count - 1)
 }
 
-testChip8 : U8 -> Bool
-testChip8 = |iter| {
+runIters : U64 -> {}
+runIters = |iter| {
     iterations = if iter == 0 then 1 else iter
-    testChip8Helper(iter, iterations)
+    testChip8Helper(iterations)
 }
 
-expect testChip8(0) == Bool.True
+expect runIters(1) == {}
